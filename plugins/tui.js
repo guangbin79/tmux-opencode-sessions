@@ -75,16 +75,22 @@ export const setup = (context) => {
     }
   };
 
-  // Fresh sessions start from the server's own status: busy/retry means work
-  // in flight; anything else (including unknown) reads as idle.
-  const initialState = (sessionID) => {
+  // Raw status from the server API (installed contract: "running"/"idle";
+  // busy/retry legacy extras); string or {status} shape, undefined on
+  // error/unknown. Used for fresh sessions and by the reconcile tick.
+  const statusValue = (sessionID) => {
     try {
       const status = context.data.session.status(sessionID);
-      const value = typeof status === "string" ? status : status?.status;
-      return value === "busy" || value === "retry" ? "running" : "idle";
+      return typeof status === "string" ? status : status?.status;
     } catch {
-      return "idle";
+      return undefined;
     }
+  };
+  // Fresh sessions start from the server's own status: work in flight
+  // (running/busy/retry) reads as running; anything else as idle.
+  const initialState = (sessionID) => {
+    const value = statusValue(sessionID);
+    return value === "running" || value === "busy" || value === "retry" ? "running" : "idle";
   };
 
   const write = () => {
@@ -106,6 +112,18 @@ export const setup = (context) => {
     if (stopped) return;
     const ids = trackedSessions();
     const ordered = new Map(ids.map((id) => [id, states.get(id) ?? initialState(id)]));
+    // The status API lags events, so it may only upgrade — and a latched
+    // done trusts a "running" reading only past the late-noise guard, the
+    // same window that filters trailing permission/form replies. A live
+    // "running" revives a stale idle and reopens done; an "idle" reading
+    // never downgrades event-driven running/done/needs-input.
+    for (const [id, value] of ordered) {
+      if (value !== "idle" && value !== "done") continue;
+      if (Date.now() - (doneAt.get(id) ?? 0) < GUARD_MS) continue;
+      if (statusValue(id) !== "running") continue;
+      ordered.set(id, "running");
+      doneAt.delete(id);
+    }
     states.clear();
     for (const [id, value] of ordered) states.set(id, value);
     for (const id of [...doneAt.keys()]) if (!ids.includes(id)) doneAt.delete(id);
@@ -121,7 +139,8 @@ export const setup = (context) => {
         doneAt.delete(sessionID);
         break;
       case "session.execution.succeeded":
-      case "session.error":
+      case "session.execution.failed": // installed OpenCode failed-turn event
+      case "session.error": // pre-2.4.1 failed-turn event, kept for compatibility
         states.set(sessionID, "done");
         doneAt.set(sessionID, Date.now());
         break;

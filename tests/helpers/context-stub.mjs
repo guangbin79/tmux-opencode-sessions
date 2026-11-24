@@ -35,7 +35,7 @@ export const waitUntil = async (pred, ms = 3000, what = "condition") => {
 export const makeContext = ({
   tabsEnabled = true,
   tabs = [],
-  status = {}, // sessionID -> {status:"busy"} | "idle" (both shapes exercised)
+  status = {}, // sessionID -> "running" | "idle" (installed contract; busy/retry legacy, both shapes exercised)
   route = { type: "home" },
 } = {}) => {
   const listeners = [];

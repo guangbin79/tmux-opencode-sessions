@@ -22,17 +22,17 @@ const boot = async (t, opts = { tabs: [{ sessionID: "ses_a" }, { sessionID: "ses
   return { ...ctx, cleanup };
 };
 
-test("initializes each tracked tab session from session.status(): busy/retry→running, else idle", async (t) => {
+test("initializes each tracked tab session from session.status(): running→running (busy/retry legacy too), else idle", async (t) => {
   fresh();
   const ctx = await boot(t, {
-    tabs: [{ sessionID: "ses_a" }, { sessionID: "ses_b" }, { sessionID: "ses_c" }],
-    status: { ses_a: { status: "busy" }, ses_b: "idle", ses_c: { status: "retry" } },
+    tabs: [{ sessionID: "ses_a" }, { sessionID: "ses_b" }, { sessionID: "ses_c" }, { sessionID: "ses_d" }, { sessionID: "ses_e" }],
+    status: { ses_a: "running", ses_b: "idle", ses_c: { status: "running" }, ses_d: { status: "busy" }, ses_e: "retry" },
   });
-  await waitUntil(() => lastValue(KEY("STATES")) === "running idle running", 3000, "busy/retry mapping");
+  await waitUntil(() => lastValue(KEY("STATES")) === "running idle running running running", 3000, "running/busy/retry mapping");
   assert.equal(lastValue(KEY("PANE")), "%9");
-  assert.equal(lastValue(KEY("SESSIONS")), "ses_a ses_b ses_c");
+  assert.equal(lastValue(KEY("SESSIONS")), "ses_a ses_b ses_c ses_d ses_e");
   ctx.emit("session.execution.started", { sessionID: "ses_b" }); // live events still flow after init
-  await waitUntil(() => lastValue(KEY("STATES")) === "running running running", 3000, "post-init event");
+  await waitUntil(() => lastValue(KEY("STATES")) === "running running running running running", 3000, "post-init event");
 });
 
 test("tab move republishes SESSIONS in the new tab order", async (t) => {
@@ -72,6 +72,19 @@ test("execution cycle: started→running, succeeded→done; instructions.updated
   await waitUntil(() => lastValue(KEY("STATES")) === "idle idle");
 });
 
+test("failed turns map to done: session.execution.failed (installed) and session.error (legacy)", async (t) => {
+  fresh();
+  const { emit } = await boot(t);
+  emit("session.execution.started", { sessionID: "ses_a" });
+  await waitUntil(() => lastValue(KEY("STATES")) === "running idle", 3000, "started");
+  emit("session.execution.failed", { sessionID: "ses_a" });
+  await waitUntil(() => lastValue(KEY("STATES")) === "done idle", 3000, "failed→done");
+  emit("session.instructions.updated", { sessionID: "ses_a" }); // a new turn before the legacy check
+  await waitUntil(() => lastValue(KEY("STATES")) === "running idle", 3000, "new turn");
+  emit("session.error", { sessionID: "ses_a" });
+  await waitUntil(() => lastValue(KEY("STATES")) === "done idle", 3000, "legacy error→done");
+});
+
 test("needs-input cycle: permission.asked/form.created→needs-input, replied/cancelled→running", async (t) => {
   fresh();
   const { emit } = await boot(t);
@@ -85,6 +98,39 @@ test("needs-input cycle: permission.asked/form.created→needs-input, replied/ca
   await waitUntil(() => lastValue(KEY("STATES")) === "idle running");
   emit("form.replied", { sessionID: "ses_b" });
   await waitUntil(() => lastValue(KEY("STATES")) === "idle running");
+});
+
+test("1s reconcile upgrades stale states from live status: idle→running and done→running; status idle never downgrades", async (t) => {
+  fresh();
+  const ctx = await boot(t, {
+    tabs: [{ sessionID: "ses_a" }, { sessionID: "ses_b" }],
+    status: { ses_a: "idle", ses_b: "idle" },
+  });
+  await waitUntil(() => lastValue(KEY("STATES")) === "idle idle", 3000, "initial idle");
+  // ses_a starts executing after setup: a later tick must upgrade and republish it
+  ctx.state.status.ses_a = "running";
+  await waitUntil(() => lastValue(KEY("STATES")) === "running idle", 3000, "stale idle upgraded to running");
+  // ses_b finishes (event-latched done); its live status stays idle — no downgrade
+  ctx.emit("session.execution.succeeded", { sessionID: "ses_b" });
+  await waitUntil(() => lastValue(KEY("STATES")) === "running done", 3000, "ses_b done");
+  await sleep(1300); // ≥1 reconcile tick sees status ses_b = idle
+  assert.equal(lastValue(KEY("STATES")), "running done");
+  // New activity on ses_b: status flips to running and reopens the latched done
+  ctx.state.status.ses_b = "running";
+  await waitUntil(() => lastValue(KEY("STATES")) === "running running", 3000, "stale done upgraded to running");
+});
+
+test("a lagging running status inside the 2s done guard stays done; persistent running after the guard reopens it", async (t) => {
+  fresh();
+  const ctx = await boot(t, { tabs: [{ sessionID: "ses_a" }], status: { ses_a: "idle" } });
+  await waitUntil(() => lastValue(KEY("STATES")) === "idle", 3000, "initial idle");
+  ctx.emit("session.execution.succeeded", { sessionID: "ses_a" });
+  await waitUntil(() => lastValue(KEY("STATES")) === "done", 3000, "done");
+  ctx.state.status.ses_a = "running"; // status lags the terminal event
+  await sleep(1300); // ≥1 reconcile tick inside the guard window
+  assert.equal(lastValue(KEY("STATES")), "done"); // trailing status noise must not reopen done
+  await sleep(1500); // guard window elapsed while status still says running
+  await waitUntil(() => lastValue(KEY("STATES")) === "running", 3000, "persistent running reopens done");
 });
 
 test("sessions are independent: ses_a done while ses_b flips running→needs-input", async (t) => {
