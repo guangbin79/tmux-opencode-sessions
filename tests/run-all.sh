@@ -24,11 +24,10 @@ done
 
 echo "== tui stub-driver tests =="
 mkdir -p /tmp/opencode
-PATH="$PWD/tests/helpers:$PATH"
-export PATH
 for t in tests/tui/*.test.mjs; do
   log=$(mktemp /tmp/opencode/fake-tmux.XXXXXX)
-  FAKE_TMUX_LOG=$log node "$t" || fail=1
+  # tests/helpers/tmux shadows the real binary only for these node runs.
+  FAKE_TMUX_LOG=$log PATH="$PWD/tests/helpers:$PATH" node "$t" || fail=1
   rm -f "$log"
 done
 
