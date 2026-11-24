@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Test double for the tmux binary: records every invocation as one line
+# ("$*") to $FAKE_TMUX_LOG. Assertions read the log; no tmux needed.
+printf '%s\n' "$*" >>"${FAKE_TMUX_LOG:?FAKE_TMUX_LOG not set}"
+exit 0
