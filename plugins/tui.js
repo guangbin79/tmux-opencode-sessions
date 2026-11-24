@@ -5,7 +5,8 @@
 //   TMUX_OPENCODE_TUI_<pid>_PANE      tmux pane id of this TUI (%N)
 //   TMUX_OPENCODE_TUI_<pid>_SESSIONS  session ids in tab order (space-separated)
 //   TMUX_OPENCODE_TUI_<pid>_STATES    states aligned element-for-element
-// scripts/pane-sessions.sh renders these into pane border labels; see README.
+// scripts/window-sessions.sh renders these into the bottom tmux window
+// status line; see README.
 //
 // States: running (R, blue), idle (I, default), done (D, red),
 // needs-input (Q, yellow).

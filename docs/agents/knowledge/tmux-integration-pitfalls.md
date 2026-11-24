@@ -4,9 +4,11 @@
 
 ## `#{E:@option}` is the only way to ship a `#(...)` format fragment
 
-- tmux 3.4 verified: a user option holding `#(cmd #{pane_id})` renders via
-  `#{E:@opencode_pane_sessions}` — nested `#{pane_id}` expands and the shell
-  command runs — **but only when a real client is attached**.
+- tmux 3.4 verified: a user option holding `#(cmd #{window_id})` renders via
+  `#{E:@opencode_window_sessions}` — nested `#{window_id}` expands and the shell
+  command runs — **but only when a real client is attached**. (Captured under
+  the old per-pane names `@opencode_pane_sessions`/`#{pane_id}`; the shipped
+  mechanism is now per-window.)
 - `tmux display-message -p` evaluates `#()` to empty on first use (async job
   table) and may stay empty without a client; never gate tests on
   `display-message` alone. Test end-to-end by attaching a client under a pty
