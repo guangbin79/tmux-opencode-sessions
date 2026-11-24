@@ -8,6 +8,11 @@ sock="oc-rt-$$"
 fail=0
 tmux -L "$sock" -f /dev/null new-session -d -x 120 -y 8
 trap 'TMUX= tmux -L "$sock" kill-server 2>/dev/null' EXIT
+# The server inherits the driver's exported environment; drop any live
+# TMUX_OPENCODE_TUI_* registration so dynamic pane ids stay deterministic.
+for key in $(TMUX= tmux -L "$sock" show-environment -g | sed -n 's/^\(TMUX_OPENCODE_TUI_[^=]*\)=.*/\1/p'); do
+  TMUX= tmux -L "$sock" set-environment -gu "$key"
+done
 win=$(TMUX= tmux -L "$sock" display-message -p '#{window_id}')
 pane=$(TMUX= tmux -L "$sock" display-message -p '#{pane_id}')
 # Route the bare `tmux` inside window-sessions.sh to the isolated server.
