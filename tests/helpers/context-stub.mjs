@@ -63,5 +63,5 @@ export const makeContext = ({
   const emit = (type, data = {}) => {
     for (const fn of [...listeners]) fn({ details: { type, ...data } });
   };
-  return { context, state, emit };
+  return { context, state, emit, listeners };
 };

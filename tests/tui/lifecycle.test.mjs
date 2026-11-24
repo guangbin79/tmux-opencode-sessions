@@ -17,7 +17,7 @@ const boot = async (t, opts = { tabs: [{ sessionID: "ses_a" }, { sessionID: "ses
   const cleanup = setup(ctx.context);
   t.after(() => cleanup());
   await waitUntil(() => lastValue(KEY("STATES")) !== undefined, 3000, "initial publish");
-  return ctx;
+  return { ...ctx, cleanup };
 };
 
 test("without TMUX_PANE the plugin is a complete no-op (no tmux calls ever)", async () => {
@@ -39,8 +39,11 @@ test("tab close drops the session from the published lists within the 1s tick", 
   fresh();
   const ctx = await boot(t);
   ctx.state.tabs.shift(); // close the tab holding ses_a
-  await waitUntil(() => lastValue(KEY("SESSIONS")) === "ses_b", 3000, "ses_a dropped");
-  assert.equal(lastValue(KEY("STATES")), "idle");
+  await waitUntil(
+    () => lastValue(KEY("SESSIONS")) === "ses_b" && lastValue(KEY("STATES")) === "idle",
+    3000,
+    "ses_a dropped",
+  );
 });
 
 test("tab open picks the new session up within the 1s tick", async (t) => {
@@ -74,13 +77,25 @@ test("tabs disabled: tracks the router's current session; home route tracks noth
   await waitUntil(() => lastValue(KEY("SESSIONS")) === "", 3000, "home empties the list");
 });
 
+test("a late event after cleanup does not re-publish the removed keys", async (t) => {
+  fresh();
+  const { cleanup, listeners } = await boot(t);
+  const handler = listeners[0]; // capture before cleanup removes it
+  cleanup();
+  await waitUntil(() => callCount(/^set-environment -gu /) >= 3, 3000, "cleanup unsets");
+  const writes = callCount(/^set-environment -g /);
+  // Simulate a delivery already in flight when cleanup ran (bus buffered).
+  handler?.({ details: { type: "session.execution.started", sessionID: "ses_a" } });
+  await sleep(300);
+  assert.equal(callCount(/^set-environment -g /), writes);
+});
+
 test("cleanup unsets all three published keys", async () => {
   fresh();
   const ctx = makeContext({ tabs: [{ sessionID: "ses_a" }] });
   const cleanup = setup(ctx.context);
   await waitUntil(() => lastValue(KEY("SESSIONS")) === "ses_a", 3000, "publish");
+  const unsets = callCount(/^set-environment -gu /); // count-based: immune to stale unsets
   cleanup();
-  await waitUntil(() => hasUnset(KEY("PANE")), 3000, "PANE unset");
-  assert.ok(hasUnset(KEY("SESSIONS")));
-  assert.ok(hasUnset(KEY("STATES")));
+  await waitUntil(() => callCount(/^set-environment -gu /) >= unsets + 3, 3000, "three new unsets");
 });

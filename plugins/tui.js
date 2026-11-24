@@ -88,6 +88,7 @@ export const setup = (context) => {
   };
 
   const write = () => {
+    if (stopped) return; // cleanup queued the unsets; never re-publish after them
     const snapshot = `${pane}\u0000${[...states.keys()].join(" ")}\u0000${[...states.values()].join(" ")}`;
     if (snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
@@ -99,12 +100,15 @@ export const setup = (context) => {
     return writes;
   };
 
-  // Reconcile tracked sessions with the live tab list, then publish.
+  // Reconcile tracked sessions with the live tab list (order included —
+  // SESSIONS must mirror tab order even after tab moves), then publish.
   const reconcile = () => {
     if (stopped) return;
     const ids = trackedSessions();
-    for (const id of ids) if (!states.has(id)) states.set(id, initialState(id));
-    for (const id of [...states.keys()]) if (!ids.includes(id)) states.delete(id);
+    const ordered = new Map(ids.map((id) => [id, states.get(id) ?? initialState(id)]));
+    states.clear();
+    for (const [id, value] of ordered) states.set(id, value);
+    for (const id of [...doneAt.keys()]) if (!ids.includes(id)) doneAt.delete(id);
     return write();
   };
 
@@ -127,6 +131,7 @@ export const setup = (context) => {
       case "permission.asked":
       case "form.created":
         states.set(sessionID, "needs-input");
+        doneAt.delete(sessionID); // a fresh question starts a new cycle; the old done timestamp no longer applies
         break;
       case "permission.replied":
       case "form.replied":
@@ -155,6 +160,7 @@ export const setup = (context) => {
   });
   void reconcile(); // publish immediately at setup
   const timer = setInterval(() => void reconcile(), TICK_MS); // tab open/close
+  timer.unref(); // a missed cleanup must not pin the host's event loop
 
   // Cleanup: stop tracking and remove all three published keys.
   return () => {
