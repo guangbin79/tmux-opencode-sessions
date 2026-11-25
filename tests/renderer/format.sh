@@ -6,6 +6,10 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 sock="oc-ft-$$"
 fail=0
+# The attached-client check needs a terminal type with real capabilities;
+# gate/CI drivers run with TERM unset or "dumb" — tmux attach then draws
+# nothing and the steady-frame assertion sees an empty capture.
+case "${TERM:-}" in '' | dumb) export TERM=xterm ;; esac
 tmux -L "$sock" -f /dev/null new-session -d -x 120 -y 8 'sleep 30'
 trap 'TMUX= tmux -L "$sock" kill-server 2>/dev/null' EXIT
 # The server inherits the driver's exported environment; drop any live
