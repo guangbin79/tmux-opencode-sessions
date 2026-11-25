@@ -3,8 +3,74 @@
 // plugin uses: ui.tabs.enabled/list, ui.router.current, data.session.status,
 // data.listen. Tests observe behavior through the fake tmux log.
 import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// In-memory agora board: an isolated HTTP board on 127.0.0.1 plus a temp
+// AGORA_HOME pointing at it, so no test ever reaches the real local agorad.
+// Empty board by default; tests mutate `tasks`, `mode` ("ok" | "500" |
+// "garbage") and `delayMs` (>= the plugin timeout simulates a timeout),
+// and inspect recorded requests.
+const STUB_TOKEN = "stub-root-token";
+let boardState = null;
+const tmpBase = () => {
+  try {
+    fs.mkdirSync("/tmp/opencode", { recursive: true });
+    return "/tmp/opencode";
+  } catch {
+    return os.tmpdir();
+  }
+};
+
+export const board = () => {
+  if (boardState) return boardState;
+  const home = fs.mkdtempSync(path.join(tmpBase(), "agora-stub-"));
+  const state = {
+    home,
+    tokenFile: path.join(home, ".agora", "root.token"),
+    tasks: {},
+    mode: "ok",
+    delayMs: 0,
+    requests: [],
+  };
+  // Claim AGORA_HOME synchronously: even the plugin's very first poll must
+  // resolve here, never to the developer's real agora home.
+  process.env.AGORA_HOME = home;
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      state.requests.push({ method: req.method, url: req.url, body, token: req.headers["x-agora-token"] });
+      const respond = () => {
+        try {
+          const ok = state.mode !== "500";
+          res.writeHead(ok ? 200 : 500, { "content-type": "application/json", connection: "close" });
+          res.end(state.mode === "garbage" ? "not-json{" : JSON.stringify({ tasks: state.tasks }));
+        } catch {
+          /* the client may have aborted (timeout) before our delayed reply */
+        }
+      };
+      if (state.delayMs) setTimeout(respond, state.delayMs).unref();
+      else respond();
+    });
+  });
+  server.unref(); // a listening stub must not keep the test process alive
+  state.ready = new Promise((resolve) =>
+    server.listen(0, "127.0.0.1", () => {
+      fs.mkdirSync(path.join(home, ".agora"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".agora", "service.json"), JSON.stringify({ port: server.address().port }));
+      fs.writeFileSync(state.tokenFile, `${STUB_TOKEN}\n`);
+      resolve();
+    }),
+  );
+  boardState = state;
+  return state;
+};
+
+export const boardReady = () => board().ready;
 
 export const calls = () =>
   fs.readFileSync(process.env.FAKE_TMUX_LOG, "utf8").split("\n").filter(Boolean);
@@ -38,6 +104,7 @@ export const makeContext = ({
   status = {}, // sessionID -> "running" | "idle" (installed contract; busy/retry legacy, both shapes exercised)
   route = { type: "home" },
 } = {}) => {
+  board(); // isolate this process from the real local agorad before any setup()
   const listeners = [];
   const state = { tabsEnabled, tabs, status, route };
   const context = {

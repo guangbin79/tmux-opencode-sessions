@@ -9,8 +9,13 @@
 // status line; see README.
 //
 // States: running (R, blue), idle (I, default), done (D, red),
-// needs-input (Q, yellow).
+// needs-input (Q, yellow). Idle sessions that dispatched tasks to the
+// local agorad board publish "agora" (A, blue) or "agora-blocked"
+// (I*, yellow) instead of plain idle.
 import { execFile } from "node:child_process";
+import fs from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // Resolve the TUI plugin helper inside OpenCode; fall back to an identity
 // shim so the module also loads under plain Node (tests, syntax checks).
@@ -24,6 +29,70 @@ try {
 const PLUGIN_ID = "tmux-opencode-sessions";
 const TICK_MS = 1000; // tab open/close reconciliation cadence
 const GUARD_MS = 2000; // late permission/form replies after done stay done
+const AGORA_TICK_MS = 2000; // local agorad board poll cadence
+const AGORA_TIMEOUT_MS = 1000; // board request timeout
+
+// Task states that keep an idle dispatcher marked "agora"; "blocked" is
+// handled separately and wins when both exist.
+const AGORA_ACTIVE = new Set([
+  "todo",
+  "dispatched",
+  "running",
+  "done",
+  "verify_failed",
+  "reopened",
+]);
+
+// Map the board's tasks object to sessionID -> "agora" | "agora-blocked".
+// Malformed shapes (non-object map, null/string rows, missing fields,
+// unknown states) are ignored, never thrown.
+const classifyAgora = (tasks) => {
+  const marks = new Map();
+  if (tasks === null || typeof tasks !== "object" || Array.isArray(tasks)) return marks;
+  for (const row of Object.values(tasks)) {
+    if (row === null || typeof row !== "object") continue;
+    const { dispatcher_sid: sid, state } = row;
+    if (typeof sid !== "string" || typeof state !== "string") continue;
+    if (state === "blocked") marks.set(sid, "agora-blocked");
+    else if (AGORA_ACTIVE.has(state) && marks.get(sid) !== "agora-blocked") marks.set(sid, "agora");
+  }
+  return marks;
+};
+
+// Local agorad connection: home via $AGORA_HOME, else the first non-empty
+// line of ~/.agora-home, else ~/.opencode-agora-plaza; then <home>/.agora
+// service.json (port) and root.token (plain text or {"token":"..."}).
+// Returns null on anything missing or malformed.
+const readAgoraConfig = () => {
+  try {
+    let home = process.env.AGORA_HOME;
+    if (!home) {
+      try {
+        home = fs
+          .readFileSync(join(homedir(), ".agora-home"), "utf8")
+          .split("\n")
+          .find((line) => line.trim() !== "")
+          ?.trim();
+      } catch {
+        /* fall through to the default home */
+      }
+    }
+    if (!home) home = join(homedir(), ".opencode-agora-plaza");
+    const svc = JSON.parse(fs.readFileSync(join(home, ".agora", "service.json"), "utf8"));
+    const rawToken = fs.readFileSync(join(home, ".agora", "root.token"), "utf8").trim();
+    let token;
+    try {
+      const parsed = JSON.parse(rawToken);
+      token = parsed && typeof parsed === "object" && typeof parsed.token === "string" ? parsed.token : rawToken;
+    } catch {
+      token = rawToken; // plain-text token file
+    }
+    if (typeof svc?.port !== "number" || !token) return null;
+    return { port: svc.port, token };
+  } catch {
+    return null;
+  }
+};
 
 const runTmux = (args) =>
   new Promise((resolve) => {
@@ -48,8 +117,9 @@ export const setup = (context) => {
   if (!pane) return;
 
   const PREFIX = `TMUX_OPENCODE_TUI_${process.pid}`;
-  const states = new Map(); // sessionID -> state
+  const states = new Map(); // sessionID -> base state (never "agora")
   const doneAt = new Map(); // sessionID -> when done was set (late-reply guard)
+  const agoraMarks = new Map(); // sessionID -> "agora" | "agora-blocked" (idle-only overlay)
   let lastSnapshot = "";
   let writes = Promise.resolve(); // serialize tmux writes against reentry
   let stopped = false;
@@ -94,15 +164,23 @@ export const setup = (context) => {
     return value === "running" || value === "busy" || value === "retry" ? "running" : "idle";
   };
 
+  // Idle sessions render their agora marker instead of plain "idle"; every
+  // other base state passes through untouched.
+  const publishedState = (id) => {
+    const base = states.get(id);
+    return base === "idle" ? agoraMarks.get(id) ?? "idle" : base;
+  };
+
   const write = () => {
     if (stopped) return; // cleanup queued the unsets; never re-publish after them
-    const snapshot = `${pane}\u0000${[...states.keys()].join(" ")}\u0000${[...states.values()].join(" ")}`;
+    const ids = [...states.keys()];
+    const snapshot = `${pane}\u0000${ids.join(" ")}\u0000${ids.map(publishedState).join(" ")}`;
     if (snapshot === lastSnapshot) return;
     lastSnapshot = snapshot;
     writes = writes
       .then(() => runTmux(["set-environment", "-g", `${PREFIX}_PANE`, pane]))
-      .then(() => runTmux(["set-environment", "-g", `${PREFIX}_SESSIONS`, [...states.keys()].join(" ")]))
-      .then(() => runTmux(["set-environment", "-g", `${PREFIX}_STATES`, [...states.values()].join(" ")]))
+      .then(() => runTmux(["set-environment", "-g", `${PREFIX}_SESSIONS`, ids.join(" ")]))
+      .then(() => runTmux(["set-environment", "-g", `${PREFIX}_STATES`, ids.map(publishedState).join(" ")]))
       .then(() => runTmux(["refresh-client"]));
     return writes;
   };
@@ -175,17 +253,59 @@ export const setup = (context) => {
     return write();
   };
 
+  // Single-flight board poll: one request in flight at most; a new tick
+  // while one runs is dropped, not queued. Any failure (missing config,
+  // fetch error, timeout, non-2xx, malformed payload) clears the markers
+  // so idle sessions fall back to plain "idle" — never touching R/D/Q.
+  let agoraInflight = false;
+  const pollAgora = async () => {
+    if (stopped || agoraInflight) return;
+    agoraInflight = true;
+    let marks = new Map();
+    try {
+      const cfg = readAgoraConfig();
+      if (cfg) {
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), AGORA_TIMEOUT_MS);
+        timer.unref();
+        try {
+          const res = await fetch(`http://127.0.0.1:${cfg.port}/board`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-agora-token": cfg.token },
+            body: JSON.stringify({ view: "full" }),
+            signal: abort.signal,
+          });
+          if (res.ok) marks = classifyAgora((await res.json())?.tasks);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    } catch {
+      /* degrade: marks stay empty */
+    } finally {
+      agoraInflight = false;
+    }
+    if (stopped) return; // a response racing cleanup must not republish
+    agoraMarks.clear();
+    for (const [id, mark] of marks) agoraMarks.set(id, mark);
+    return write();
+  };
+
   const stopListen = context.data.listen((event) => {
     void applyEvent(eventOf(event));
   });
   void reconcile(); // publish immediately at setup
   const timer = setInterval(() => void reconcile(), TICK_MS); // tab open/close
   timer.unref(); // a missed cleanup must not pin the host's event loop
+  void pollAgora(); // markers restored from the current board, not event history
+  const agoraTimer = setInterval(() => void pollAgora(), AGORA_TICK_MS);
+  agoraTimer.unref();
 
   // Cleanup: stop tracking and remove all three published keys.
   return () => {
     stopped = true;
     clearInterval(timer);
+    clearInterval(agoraTimer);
     stopListen();
     for (const suffix of ["PANE", "SESSIONS", "STATES"]) {
       writes = writes.then(() => runTmux(["set-environment", "-gu", `${PREFIX}_${suffix}`]));

@@ -119,5 +119,13 @@ check_eq "swapped panes reorder groups by pane_index" \
   "$(render "$win")"
 kill $live2 2>/dev/null
 
+# 13. agora idle markers: all six state letters in one group (A blue, I* yellow)
+set_env "TMUX_OPENCODE_TUI_$$_SESSIONS" "ses_a ses_b ses_c ses_d ses_e ses_f"
+set_env "TMUX_OPENCODE_TUI_$$_STATES" "running idle done needs-input agora agora-blocked"
+check_eq "all six state letters incl. agora markers" \
+  ' [#[fg=blue]R#[fg=default] I #[fg=red]D#[fg=default] #[fg=yellow]Q#[fg=default] #[fg=blue]A#[fg=default] #[fg=yellow]I*#[fg=default]]' \
+  "$(render "$win")"
+if grep -q '#\[default\]' "$out_file"; then echo "FAIL: #[default] emitted"; fail=1; else echo "ok: no #[default] with agora markers"; fi
+
 rm -f "$out_file"
 exit $fail

@@ -19,10 +19,22 @@ normal status entries, byte for byte.
 | `I` | idle | default (no color markup) |
 | `D` | done | red |
 | `Q` | waiting-for-answer (needs input) | yellow |
+| `A` | idle + this session has agora tasks in flight | blue |
+| `I*` | idle + a task this session dispatched is blocked | yellow |
 
 Every colored letter is closed with `#[fg=default]` (never `#[default]`).
 Viewing a done tab changes only that session `D → I`; running and waiting
 states are unaffected.
+
+**Agora idle markers:** when the local agorad board shows tasks dispatched
+by an idle session — any of
+todo/dispatched/running/done/verify_failed/reopened — its `I` becomes `A`;
+if any of them is `blocked`, it becomes `I*` instead. The board is polled
+every 2 s (home discovery via `$AGORA_HOME`, `~/.agora-home`, or
+`~/.opencode-agora-plaza`; service port from `<home>/.agora/service.json`,
+root token from `<home>/.agora/root.token`). Any error — agorad down,
+timeout, non-2xx, malformed reply, missing config — simply falls back to
+the plain `I`; running/done/waiting states are never affected.
 
 **Empty output rule:** a window with no OpenCode sessions renders zero
 bytes — no brackets, no trailing space — so default window entries stay
@@ -37,7 +49,9 @@ per pane, in pane-index order: `1:opencode [R I] [D Q]`.
   `TMUX_OPENCODE_TUI_<pid>_PANE`, `..._SESSIONS`, `..._STATES`. Writes are
   change-gated, serialized, refreshed immediately on events, reconciled at
   least once per second for tab open/close, and all three keys are removed
-  on cleanup. Without `TMUX_PANE` the plugin does nothing.
+  on cleanup. The plugin also polls the local agorad board every 2 s to
+  overlay the agora idle markers (see above). Without `TMUX_PANE` the
+  plugin does nothing.
 - `scripts/window-sessions.sh <window_id>` renders the letters for one
   window from those keys — one bracket group per pane that hosts live
   OpenCode sessions — skipping dead TUI pids and foreign windows.

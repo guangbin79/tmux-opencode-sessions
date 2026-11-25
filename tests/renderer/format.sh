@@ -22,10 +22,11 @@ wpane=$(TMUX= tmux -L "$sock" new-window -P -F '#{pane_id}' 'sleep 30')
 TMUX= tmux -L "$sock" rename-window opencode
 TMUX= tmux -L "$sock" set -w automatic-rename off
 
-# Register this TUI's pane with a running and an idle session (live pid = $$).
+# Register this TUI's pane with a running, an idle, an agora and an
+# agora-blocked session (live pid = $$).
 TMUX= tmux -L "$sock" set-environment -g "TMUX_OPENCODE_TUI_$$_PANE" "$wpane"
-TMUX= tmux -L "$sock" set-environment -g "TMUX_OPENCODE_TUI_$$_SESSIONS" "ses_a ses_b"
-TMUX= tmux -L "$sock" set-environment -g "TMUX_OPENCODE_TUI_$$_STATES" "running idle"
+TMUX= tmux -L "$sock" set-environment -g "TMUX_OPENCODE_TUI_$$_SESSIONS" "ses_a ses_b ses_c ses_d"
+TMUX= tmux -L "$sock" set-environment -g "TMUX_OPENCODE_TUI_$$_STATES" "running idle agora agora-blocked"
 
 # Simulate an upgrade from the pane-border version: stale option present.
 TMUX= tmux -L "$sock" set -g @opencode_pane_sessions "stale"
@@ -70,10 +71,10 @@ for _ in $(seq 1 60); do
   frame=$(sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g; s/\x1b[()][0-9A-B]//g' "$pty_out" | grep '\[0\] .*KEEP-ME' | tail -n 1)
   last_frame=${frame##*\[0\] }
   case $last_frame in
-    '0:opencode 1:opencode* [R I]'*KEEP-ME*) seen=1; break ;;
+    '0:opencode 1:opencode* [R I A I*]'*KEEP-ME*) seen=1; break ;;
   esac
 done
-if [ "$seen" = 1 ]; then echo "ok: steady frame renders bare 0:opencode and 1:opencode* [R I] via attached client"; else echo "FAIL: steady frame is [$last_frame]"; fail=1; fi
+if [ "$seen" = 1 ]; then echo "ok: steady frame renders bare 0:opencode and 1:opencode* [R I A I*] via attached client"; else echo "FAIL: steady frame is [$last_frame]"; fail=1; fi
 wait 2>/dev/null
 rm -f "$pty_out"
 exit $fail

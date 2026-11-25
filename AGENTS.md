@@ -25,7 +25,10 @@
 ## Binding contracts
 
 - Letter/color mapping: R=running blue, I=idle default, D=done red,
-  Q=needs-input yellow; colored letters end with `#[fg=default]`, never
-  `#[default]`; no sessions ⇒ zero bytes of window status output.
+  Q=needs-input yellow, A=agora blue, I*=agora-blocked yellow; colored
+  letters end with `#[fg=default]`, never `#[default]`; no sessions ⇒ zero
+  bytes of window status output. Agora markers replace the idle letter
+  only; R/D/Q transitions and precedence are untouched, and any board
+  read failure degrades to plain idle.
 - `STATES` aligns element-for-element with `SESSIONS` (tab order).
 - Never modify `status-right`, `tmux.conf`, TPM, or files outside this repo.

@@ -4,7 +4,8 @@
 # Output: " [R I] [D Q]"-style — one bracket group per pane that hosts live
 # OpenCode sessions, in pane_index order (zero bytes when the window has
 # no OpenCode sessions). Letters: R=running (blue), I=idle (default color),
-# D=done (red), Q=needs-input (yellow). Reads
+# D=done (red), Q=needs-input (yellow), A=agora (blue), I*=agora-blocked
+# (yellow). Reads
 # TMUX_OPENCODE_TUI_<pid>_{PANE,SESSIONS,STATES} from the tmux global
 # environment (written by plugins/tui.js) and skips dead TUI pids.
 set -u
@@ -39,6 +40,8 @@ while read -r pane _idx; do
         running) letters+=('#[fg=blue]R#[fg=default]') ;;
         done) letters+=('#[fg=red]D#[fg=default]') ;;
         needs-input) letters+=('#[fg=yellow]Q#[fg=default]') ;;
+        agora) letters+=('#[fg=blue]A#[fg=default]') ;;
+        agora-blocked) letters+=('#[fg=yellow]I*#[fg=default]') ;;
         *) letters+=('I') ;;
       esac
     done
