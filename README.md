@@ -11,6 +11,10 @@ normal status entries, byte for byte.
 2:opencode [D Q Q]                       ← one done, two waiting for answers
 ```
 
+A live status line:
+
+![live status line](docs/screenshot.png)
+
 ## Letters and colors
 
 | Letter | State | Color |
