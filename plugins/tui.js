@@ -10,8 +10,9 @@
 //
 // States: running (R, blue), idle (I, default), done (D, red),
 // needs-input (Q, yellow). Idle sessions that dispatched tasks to the
-// local agorad board publish "agora" (A, blue) or "agora-blocked"
-// (I*, yellow) instead of plain idle.
+// local agorad publish "agora" (A, blue) or "agora-blocked" (I*, yellow)
+// instead of plain idle; the source is the lightweight POST /marks poll
+// (non-terminal tasks only), not the heavy /board face.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { homedir } from "node:os";
@@ -29,8 +30,8 @@ try {
 const PLUGIN_ID = "tmux-opencode-sessions";
 const TICK_MS = 1000; // tab open/close reconciliation cadence
 const GUARD_MS = 2000; // late permission/form replies after done stay done
-const AGORA_TICK_MS = 2000; // local agorad board poll cadence
-const AGORA_TIMEOUT_MS = 1000; // board request timeout
+const AGORA_TICK_MS = 2000; // local agorad /marks poll cadence
+const AGORA_TIMEOUT_MS = 1000; // /marks request timeout
 
 // Task states that keep an idle dispatcher marked "agora"; "blocked" is
 // handled separately and wins when both exist.
@@ -43,7 +44,8 @@ const AGORA_ACTIVE = new Set([
   "reopened",
 ]);
 
-// Map the board's tasks object to sessionID -> "agora" | "agora-blocked".
+// Map the /marks response's tasks object ({tid: {state, dispatcher_sid}},
+// non-terminal tasks only) to sessionID -> "agora" | "agora-blocked".
 // Malformed shapes (non-object map, null/string rows, missing fields,
 // unknown states) are ignored, never thrown.
 const classifyAgora = (tasks) => {
@@ -253,7 +255,7 @@ export const setup = (context) => {
     return write();
   };
 
-  // Single-flight board poll: one request in flight at most; a new tick
+  // Single-flight /marks poll: one request in flight at most; a new tick
   // while one runs is dropped, not queued. Any failure (missing config,
   // fetch error, timeout, non-2xx, malformed payload) clears the markers
   // so idle sessions fall back to plain "idle" — never touching R/D/Q.
@@ -269,10 +271,10 @@ export const setup = (context) => {
         const timer = setTimeout(() => abort.abort(), AGORA_TIMEOUT_MS);
         timer.unref();
         try {
-          const res = await fetch(`http://127.0.0.1:${cfg.port}/board`, {
+          const res = await fetch(`http://127.0.0.1:${cfg.port}/marks`, {
             method: "POST",
             headers: { "content-type": "application/json", "x-agora-token": cfg.token },
-            body: JSON.stringify({ view: "full" }),
+            body: JSON.stringify({}),
             signal: abort.signal,
           });
           if (res.ok) marks = classifyAgora((await res.json())?.tasks);
@@ -297,7 +299,7 @@ export const setup = (context) => {
   void reconcile(); // publish immediately at setup
   const timer = setInterval(() => void reconcile(), TICK_MS); // tab open/close
   timer.unref(); // a missed cleanup must not pin the host's event loop
-  void pollAgora(); // markers restored from the current board, not event history
+  void pollAgora(); // markers restored from the current marks, not event history
   const agoraTimer = setInterval(() => void pollAgora(), AGORA_TICK_MS);
   agoraTimer.unref();
 

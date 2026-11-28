@@ -1,9 +1,9 @@
-// Agora idle-status tests: the plugin polls the local agorad board and,
-// for idle sessions only, publishes "agora" (this session dispatched tasks
-// still in flight) or "agora-blocked" (one of them is blocked). Covers
+// Agora idle-status tests: the plugin polls the local agorad /marks face
+// and, for idle sessions only, publishes "agora" (this session dispatched
+// tasks still in flight) or "agora-blocked" (one of them is blocked). Covers
 // ownership, active-state membership, precedence, transitions, degradation,
-// reload restoration, late responses after cleanup, malformed boards, and
-// the request shape (both root-token file formats).
+// reload restoration, late responses after cleanup, malformed marks
+// payloads, and the request shape (both root-token file formats).
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -22,7 +22,7 @@ await boardReady(); // stub board listening + config visible before any setup()
 
 const row = (dispatcher_sid, state) => ({ dispatcher_sid, state });
 const tasks = (rows) => Object.fromEntries(rows.map((r, i) => [`ag-${i}`, r]));
-// One board poll cycle is 2s; budgets account for it.
+// One marks poll cycle is 2s; budgets account for it.
 const seeStates = (expected, ms = 8000) =>
   waitUntil(() => lastValue(KEY("STATES")) === expected, ms, `STATES → ${expected}`);
 
@@ -94,7 +94,7 @@ test("non-idle precedence: running/done/needs-input keep their letters despite a
   await seeStates("agora-blocked agora");
 });
 
-test("board transitions: active→agora, terminal→plain idle, blocked→agora-blocked", async (t) => {
+test("marks transitions: active→agora, terminal→plain idle, blocked→agora-blocked", async (t) => {
   await boot(t, { tabs: [{ sessionID: "ses_a" }] });
   b.tasks = tasks([row("ses_a", "dispatched")]);
   await seeStates("agora");
@@ -140,7 +140,7 @@ test("read failures (non-2xx, malformed body, timeout, missing config) clear mar
   process.env.AGORA_HOME = b.home;
 });
 
-test("reload restores markers from the current board, not from event history", async (t) => {
+test("reload restores markers from the current marks, not from event history", async (t) => {
   b.tasks = tasks([row("ses_a", "running")]);
   const first = makeContext({ tabs: [{ sessionID: "ses_a" }, { sessionID: "ses_b" }] });
   const stop1 = setup(first.context);
@@ -157,7 +157,7 @@ test("reload restores markers from the current board, not from event history", a
   await seeStates("idle idle");
 });
 
-test("a board response resolving after cleanup never republishes the removed keys", async (t) => {
+test("a marks response resolving after cleanup never republishes the removed keys", async (t) => {
   b.tasks = tasks([row("ses_a", "todo")]);
   b.delayMs = 900; // the response outlives the cleanup below
   t.after(() => {
@@ -186,13 +186,13 @@ test("a board response resolving after cleanup never republishes the removed key
   assert.deepStrictEqual(calls(), settled); // nothing at all: no republish
 });
 
-test("request shape: POST /board with {\"view\":\"full\"} and the root-token header; token file may be plain text or JSON", async (t) => {
+test("request shape: POST /marks with an empty JSON body and the root-token header; token file may be plain text or JSON", async (t) => {
   await boot(t, { tabs: [{ sessionID: "ses_a" }] });
   await waitUntil(() => b.requests.length > 0, 3000, "at least one request");
   const first = b.requests.at(-1);
   assert.equal(first.method, "POST");
-  assert.equal(first.url, "/board");
-  assert.equal(first.body, '{"view":"full"}');
+  assert.equal(first.url, "/marks");
+  assert.equal(first.body, "{}");
   assert.equal(first.token, "stub-root-token");
   // JSON-format root.token: {"token":"..."}
   fs.writeFileSync(b.tokenFile, JSON.stringify({ token: "stub-json-token" }));

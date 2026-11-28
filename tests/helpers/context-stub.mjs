@@ -9,11 +9,12 @@ import path from "node:path";
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// In-memory agora board: an isolated HTTP board on 127.0.0.1 plus a temp
-// AGORA_HOME pointing at it, so no test ever reaches the real local agorad.
-// Empty board by default; tests mutate `tasks`, `mode` ("ok" | "500" |
-// "garbage") and `delayMs` (>= the plugin timeout simulates a timeout),
-// and inspect recorded requests.
+// In-memory agora marks stub: an isolated HTTP server on 127.0.0.1 plus a
+// temp AGORA_HOME pointing at it, so no test ever reaches the real local
+// agorad. Serves the /marks contract ({"tasks":{...}}) on /marks only and
+// 404s every other path; empty marks by default; tests mutate `tasks`,
+// `mode` ("ok" | "500" | "garbage") and `delayMs` (>= the plugin timeout
+// simulates a timeout), and inspect recorded requests.
 const STUB_TOKEN = "stub-root-token";
 let boardState = null;
 const tmpBase = () => {
@@ -44,6 +45,11 @@ export const board = () => {
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       state.requests.push({ method: req.method, url: req.url, body, token: req.headers["x-agora-token"] });
+      if (req.url !== "/marks") { // agorad serves the marks face only here
+        res.writeHead(404, { "content-type": "application/json", connection: "close" });
+        res.end("{}");
+        return;
+      }
       const respond = () => {
         try {
           const ok = state.mode !== "500";
